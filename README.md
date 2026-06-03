@@ -4,7 +4,7 @@ An [Ableton Live](https://www.ableton.com) extension that removes silence from a
 
 ## Installation
 
-1. Download **`Strip-Silence-1.0.19.ablx`** from the [latest release](../../releases/latest)
+1. Download **`Strip-Silence-1.0.19.ablx`** from this page
 2. Open Ableton Live → **Preferences → Extensions**
 3. Drag and drop the `.ablx` file onto the Extensions page
 
@@ -18,7 +18,7 @@ Requires the Ableton Live beta build that supports Extensions.
 - Option to snap cuts to the nearest beat
 - Right-click an arrangement time selection to process one or more tracks simultaneously
 - Right-click a track header to process the full track automatically
-- Renders only the clip extents — skips empty gaps between clips for faster processing
+- Renders only clip extents — skips empty gaps between clips for faster processing
 - Remembers your last-used settings between sessions
 - Styled with Ableton's own UI font and colour palette
 
@@ -47,14 +47,17 @@ Requires the Ableton Live beta build that supports Extensions.
 
 ## Development
 
+All source files are in the `source/` folder.
+
 ### Prerequisites
 
 - Node.js ≥ 24.14.1
-- The Ableton Extensions SDK (available to beta testers via Ableton's Centercode program — place the `.tgz` files in `vendor/`)
+- The Ableton Extensions SDK (available to beta testers via Ableton's Centercode program — place the `.tgz` files in `source/vendor/`)
 
 ### Setup
 
 ```sh
+cd source
 npm install
 ```
 
@@ -64,10 +67,10 @@ npm install
 npm start          # build (dev) + load into Live via Developer Mode
 npm run build:dev  # dev bundle with sourcemaps
 npm run build      # production bundle
-npm run package    # bump patch version, build, and produce a .ablx
+npm run package    # bump patch version, build, and move .ablx to repo root
 ```
 
-`npm run package` automatically increments the patch version on every run.
+`npm run package` automatically increments the patch version and places the new `.ablx` in the repo root ready to commit.
 
 ## License
 

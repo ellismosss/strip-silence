@@ -10,7 +10,7 @@
     "build": "tsc --noEmit && tsx build.ts --production",
     "build:dev": "tsc --noEmit && tsx build.ts",
     "start": "npm run build:dev && extensions-cli run",
-    "package": "tsx scripts/bump-version.ts && npm run build && extensions-cli package"
+    "package": "tsx scripts/bump-version.ts && npm run build && extensions-cli package && mv Strip-Silence-*.ablx ../"
   },
   "dependencies": {
     "@ableton-extensions/sdk": "file:./vendor/ableton-extensions-sdk-1.0.0-beta.0.tgz"

@@ -6,6 +6,9 @@ vendor/
 # environment & local config
 .env
 
+# intermediate .ablx files produced inside source/ — moved to root by npm run package
+source/*.ablx
+
 # system & editor
 .DS_Store
 *.log
