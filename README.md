@@ -13,15 +13,12 @@ Requires the Ableton Live beta build that supports Extensions.
 ## Features
 
 - Detects and removes silent regions from one or more audio tracks
-- Works with both **AIFF and WAV** renders (follows your Record/Warp/Launch preference)
 - Configurable threshold, minimum silence duration, pre-roll, and post-roll
 - Option to snap cuts to the nearest beat
-- **Ripple edit** — automatically closes the gaps after stripping, sliding clips together
+- Ripple edit option — automatically closes the gaps after stripping, sliding clips together
 - Right-click an arrangement time selection to process one or more tracks simultaneously
 - Right-click a track header to process the full track automatically
-- Renders only clip extents — skips empty gaps between clips for faster processing
 - Remembers your last-used settings between sessions
-- Styled with Ableton's own UI font and colour palette
 
 ## Usage
 
