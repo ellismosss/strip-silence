@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Strip Silence</title>
+  <style>
+    __FONT_CSS__
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { overflow: hidden; width: 100%; height: 100%; }
+
+    body {
+      font-family: 'AbletonSans', -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 12px;
+      background: #4F4F4F;
+      color: #F2F2F2;
+      display: flex;
+      flex-direction: column;
+      -webkit-font-smoothing: antialiased;
+      user-select: none;
+    }
+
+    .title-bar {
+      background: #2C2C2C;
+      border-bottom: 1px solid #686868;
+      text-align: center;
+      padding: 9px 0 8px;
+      font-weight: 700;
+      font-size: 13px;
+      color: #F2F2F2;
+      flex-shrink: 0;
+    }
+
+    .content {
+      flex: 1;
+      padding: 8px 14px 10px;
+    }
+
+    .section-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #686868;
+      margin-top: 10px;
+      margin-bottom: 5px;
+    }
+    .section-label:first-child { margin-top: 2px; }
+
+    .control { margin-bottom: 7px; }
+
+    .control-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 4px;
+    }
+
+    .control-name { color: #F2F2F2; }
+
+    .control-value {
+      font-weight: 700;
+      color: #FFAD56;
+      font-variant-numeric: tabular-nums;
+      min-width: 54px;
+      text-align: right;
+      cursor: pointer;
+    }
+    .control-value:hover { opacity: 0.8; }
+
+    .control-value-edit {
+      width: 60px;
+      background: #2C2C2C;
+      border: 1px solid #FFAD56;
+      border-radius: 2px;
+      color: #FFAD56;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 700;
+      text-align: right;
+      padding: 0 4px;
+      font-variant-numeric: tabular-nums;
+      outline: none;
+    }
+
+    input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 3px;
+      background: transparent;
+      outline: none;
+      cursor: pointer;
+    }
+
+    input[type="range"]::-webkit-slider-runnable-track {
+      height: 3px;
+      border-radius: 2px;
+      background: linear-gradient(
+        to right,
+        #FFAD56 0%,
+        #FFAD56 var(--fill, 0%),
+        #686868 var(--fill, 0%),
+        #686868 100%
+      );
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 13px;
+      height: 13px;
+      border-radius: 50%;
+      background: #FFAD56;
+      margin-top: -5px;
+      cursor: pointer;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+    }
+
+    input[type="range"]:focus::-webkit-slider-thumb {
+      box-shadow: 0 0 0 3px rgba(255,173,86,0.3), 0 1px 3px rgba(0,0,0,0.5);
+    }
+
+    .divider {
+      height: 1px;
+      background: #686868;
+      margin: 8px 0 2px;
+    }
+
+    /* ── Checkbox option ───────────────────────────────────────── */
+    .option-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 10px;
+      cursor: pointer;
+    }
+
+    .option-row input[type="checkbox"] {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 13px;
+      height: 13px;
+      border: 1px solid #686868;
+      border-radius: 2px;
+      background: #2C2C2C;
+      cursor: pointer;
+      flex-shrink: 0;
+      position: relative;
+    }
+
+    .option-row input[type="checkbox"]:checked {
+      background: #FFAD56;
+      border-color: #FFAD56;
+    }
+
+    .option-row input[type="checkbox"]:checked::after {
+      content: '';
+      position: absolute;
+      left: 2px;
+      top: 0px;
+      width: 5px;
+      height: 8px;
+      border: 2px solid #2C2C2C;
+      border-top: none;
+      border-left: none;
+      transform: rotate(45deg);
+    }
+
+    .option-row label {
+      color: #F2F2F2;
+      cursor: pointer;
+      line-height: 1;
+    }
+
+    /* ── Footer ────────────────────────────────────────────────── */
+    .footer {
+      display: flex;
+      gap: 6px;
+      padding: 8px 14px 10px;
+      background: #2C2C2C;
+      border-top: 1px solid #686868;
+      flex-shrink: 0;
+    }
+
+    button {
+      flex: 1;
+      padding: 7px 0;
+      border-radius: 3px;
+      border: 1px solid #686868;
+      background: #4F4F4F;
+      color: #F2F2F2;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: filter 0.08s;
+    }
+    button:active { filter: brightness(0.85); }
+    button:hover { filter: brightness(1.1); }
+
+    .btn-run {
+      background: #FFAD56;
+      color: #2C2C2C;
+      border-color: #FFAD56;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="title-bar">Strip Silence</div>
+
+  <div class="content">
+    <p class="section-label">Detection</p>
+
+    <div class="control">
+      <div class="control-header">
+        <span class="control-name">Threshold</span>
+        <span class="control-value" id="threshold-display"></span>
+      </div>
+      <input type="range" id="threshold" min="-80" max="-10" step="1" value="__THRESHOLD__">
+    </div>
+
+    <div class="control">
+      <div class="control-header">
+        <span class="control-name">Minimum Duration</span>
+        <span class="control-value" id="min-silence-display"></span>
+      </div>
+      <input type="range" id="min-silence" min="0.05" max="2.0" step="0.05" value="__MIN_SILENCE__">
+    </div>
+
+    <div class="divider"></div>
+    <p class="section-label">Rolls</p>
+
+    <div class="control">
+      <div class="control-header">
+        <span class="control-name">Pre-roll</span>
+        <span class="control-value" id="preroll-display"></span>
+      </div>
+      <input type="range" id="preroll" min="0" max="500" step="5" value="__PRE_ROLL__">
+    </div>
+
+    <div class="control">
+      <div class="control-header">
+        <span class="control-name">Post-roll</span>
+        <span class="control-value" id="postroll-display"></span>
+      </div>
+      <input type="range" id="postroll" min="0" max="500" step="5" value="__POST_ROLL__">
+    </div>
+
+    <div class="divider"></div>
+
+    <label class="option-row">
+      <input type="checkbox" id="snap-to-beat" __SNAP_CHECKED__>
+      <span>Cut to nearest beat</span>
+    </label>
+  </div>
+
+  <div class="footer">
+    <button class="btn-cancel" onclick="cancel()">Cancel</button>
+    <button class="btn-run" onclick="run()">Strip Silence</button>
+  </div>
+
+  <script>
+    function postToHost(msg) {
+      if (window.webkit?.messageHandlers?.live) {
+        window.webkit.messageHandlers.live.postMessage(msg);
+      } else if (window.chrome?.webview) {
+        window.chrome.webview.postMessage(msg);
+      }
+    }
+    function closeWithResult(v) {
+      postToHost({ method: "close_and_send", params: [v] });
+    }
+
+    function setupSlider(id, displayId, format) {
+      const input = document.getElementById(id);
+      let display = document.getElementById(displayId);
+
+      function refresh() {
+        const min = parseFloat(input.min), max = parseFloat(input.max), val = parseFloat(input.value);
+        input.style.setProperty('--fill', (((val - min) / (max - min)) * 100).toFixed(1) + '%');
+        display.textContent = format(val);
+      }
+
+      function startEdit() {
+        const edit = document.createElement('input');
+        edit.type = 'text';
+        edit.value = input.value;
+        edit.className = 'control-value-edit';
+        function commit() {
+          const v = parseFloat(edit.value);
+          if (!isNaN(v)) {
+            const min  = parseFloat(input.min);
+            const max  = parseFloat(input.max);
+            const step = parseFloat(input.step);
+            const clamped  = Math.max(min, Math.min(max, v));
+            const steps    = Math.round((clamped - min) / step);
+            const decimals = (String(step).split('.')[1] ?? '').length;
+            input.value    = (min + steps * step).toFixed(decimals);
+          }
+          edit.replaceWith(display);
+          refresh();
+        }
+        edit.addEventListener('blur', commit);
+        edit.addEventListener('keydown', e => {
+          if (e.key === 'Enter') { e.preventDefault(); edit.blur(); }
+          if (e.key === 'Escape') edit.replaceWith(display);
+        });
+        display.replaceWith(edit);
+        edit.select();
+      }
+
+      input.addEventListener('input', refresh);
+      input.addEventListener('dblclick', startEdit);
+      display.addEventListener('dblclick', startEdit);
+
+      refresh();
+    }
+
+    setupSlider('threshold',   'threshold-display',   v => (v >= 0 ? '+' : '−') + Math.abs(v) + ' dB');
+    setupSlider('min-silence', 'min-silence-display',  v => v.toFixed(2) + ' s');
+    setupSlider('preroll',     'preroll-display',      v => v === 0 ? '0 ms' : v + ' ms');
+    setupSlider('postroll',    'postroll-display',     v => v === 0 ? '0 ms' : v + ' ms');
+
+    function run() {
+      closeWithResult(JSON.stringify({
+        thresholdDb:        parseFloat(document.getElementById('threshold').value),
+        minSilenceDuration: parseFloat(document.getElementById('min-silence').value),
+        preRollMs:          parseFloat(document.getElementById('preroll').value),
+        postRollMs:         parseFloat(document.getElementById('postroll').value),
+        snapToBeats:        document.getElementById('snap-to-beat').checked,
+      }));
+    }
+    function cancel() { closeWithResult(''); }
+  </script>
+</body>
+</html>

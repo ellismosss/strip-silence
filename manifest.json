@@ -1,0 +1,7 @@
+{
+    "name": "Strip Silence",
+    "author": "Ellis Moss",
+    "entry": "dist/extension.js",
+    "version": "1.0.14",
+    "minimumApiVersion": "1.0.0"
+}
