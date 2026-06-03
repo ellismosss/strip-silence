@@ -1,6 +1,6 @@
 {
   "name": "strip-silence",
-  "version": "1.0.33",
+  "version": "1.0.35",
   "main": "dist/extension.js",
   "engines": {
     "node": ">=24.14.1"
