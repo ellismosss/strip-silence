@@ -255,6 +255,11 @@
       <span>Cut to nearest beat</span>
     </label>
 
+    <label class="option-row">
+      <input type="checkbox" id="ripple-edit" __RIPPLE_CHECKED__>
+      <span>Ripple edit</span>
+    </label>
+
   </div>
 
   <div class="footer">
@@ -331,6 +336,7 @@
         preRollMs:          parseFloat(document.getElementById('preroll').value),
         postRollMs:         parseFloat(document.getElementById('postroll').value),
         snapToBeats:        document.getElementById('snap-to-beat').checked,
+        rippleEdit:         document.getElementById('ripple-edit').checked,
       }));
     }
     function cancel() { closeWithResult(''); }

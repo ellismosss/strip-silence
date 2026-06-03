@@ -4,6 +4,8 @@ import {
   type ActivationContext,
   DataModelObject,
   AudioTrack,
+  AudioClip,
+  type ClipLoopSettings,
   Handle,
 } from "@ableton-extensions/sdk";
 import * as fs from "fs/promises";
@@ -17,7 +19,7 @@ interface StripSilenceOptions {
   preRollMs: number;
   postRollMs: number;
   snapToBeats: boolean;
-
+  rippleEdit: boolean;
 }
 
 const DEFAULTS: StripSilenceOptions = {
@@ -26,7 +28,7 @@ const DEFAULTS: StripSilenceOptions = {
   preRollMs: 50,
   postRollMs: 50,
   snapToBeats: false,
-
+  rippleEdit: false,
 };
 
 interface SilenceRange {
@@ -345,10 +347,11 @@ export function activate(activation: ActivationContext) {
       .replace("__MIN_SILENCE__", String(saved.minSilenceDuration))
       .replace("__PRE_ROLL__", String(saved.preRollMs))
       .replace("__POST_ROLL__", String(saved.postRollMs))
-      .replace("__SNAP_CHECKED__", saved.snapToBeats ? "checked" : "");
+      .replace("__SNAP_CHECKED__",   saved.snapToBeats ? "checked" : "")
+      .replace("__RIPPLE_CHECKED__", saved.rippleEdit   ? "checked" : "");
 
     const raw = await context.ui
-      .showModalDialog(`data:text/html,${encodeURIComponent(dialogHtml)}`, 320, 370)
+      .showModalDialog(`data:text/html,${encodeURIComponent(dialogHtml)}`, 320, 400)
       .catch(() => "");
 
     if (!raw) return null;
@@ -472,8 +475,98 @@ export function activate(activation: ActivationContext) {
       );
 
       await Promise.all(promises);
+      // ── Ripple edit ──────────────────────────────────────────────────────
+      if (opts.rippleEdit && pending.length) {
+        update("Ripple editing…", 92);
+        const uniqueTracks = [...new Set(pending.map(p => p.track))];
+        for (const track of uniqueTracks) {
+          await rippleTrack(track, selectionStart, selectionEnd);
+        }
+      }
+
       update("Done", 100);
     });
+  }
+
+  // ── Ripple edit ───────────────────────────────────────────────────────────
+  // Packs clips within the selection leftward to close gaps left by silence
+  // removal. Processes left-to-right and creates each clip at its new position
+  // BEFORE deleting the original — so if a create fails, the clip is preserved.
+  async function rippleTrack(
+    track: AudioTrack<"1.0.0">,
+    selectionStart: number,
+    selectionEnd: number,
+  ): Promise<void> {
+    const MIN_DURATION = 0.01;
+
+    const clips = track.arrangementClips
+      .filter(c =>
+        c.startTime >= selectionStart - 0.001 &&
+        c.endTime   <= selectionEnd   + 0.001 &&
+        c.duration  >= MIN_DURATION
+      )
+      .filter((c): c is AudioClip<"1.0.0"> => c instanceof AudioClip)
+      .sort((a, b) => a.startTime - b.startTime);
+
+    if (!clips.length) return;
+
+    let cursor = selectionStart;
+    const moves: Array<{ clip: AudioClip<"1.0.0">; newStart: number }> = [];
+
+    for (const clip of clips) {
+      if (Math.abs(clip.startTime - cursor) > 0.001) {
+        moves.push({ clip, newStart: cursor });
+      }
+      cursor += clip.duration;
+    }
+
+    if (!moves.length) return;
+
+    const snapshots = moves.map(({ clip, newStart }) => ({
+      clip,
+      newStart,
+      filePath: clip.filePath,
+      duration: clip.duration,
+      isWarped: clip.warping,
+      loopSettings: {
+        looping:     clip.warping && clip.looping,
+        startMarker: clip.startMarker,
+        endMarker:   clip.endMarker,
+        loopStart:   clip.warping && clip.looping ? clip.loopStart : clip.startMarker,
+        loopEnd:     clip.endMarker, // SDK requires loopEnd === endMarker
+      } as ClipLoopSettings,
+      name:  clip.name,
+      color: clip.color,
+      muted: clip.muted,
+    }));
+
+    // Create at new position FIRST (so original is safe if create fails),
+    // then delete original. Left-to-right order avoids position conflicts.
+    for (const s of snapshots) {
+      try {
+        const newClip = await context.withinTransaction(() =>
+          track.createAudioClip({
+            filePath:     s.filePath,
+            startTime:    s.newStart,
+            duration:     s.duration,
+            isWarped:     s.isWarped,
+            loopSettings: s.loopSettings,
+          })
+        );
+
+        await context.withinTransaction(() => track.deleteClip(s.clip));
+
+        context.withinTransaction(() => {
+          newClip.name  = s.name;
+          newClip.color = s.color;
+          newClip.muted = s.muted;
+        });
+      } catch (e) {
+        console.error(`[Strip Silence] Ripple: could not move "${s.clip.name}":`, e);
+      }
+    }
+
+    console.log(`[Strip Silence] Ripple: moved ${moves.length} clip(s) on "${track.name}"`);
   }
 
   // ── Command: arrangement selection (right-click selection) ────────────────
