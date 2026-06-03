@@ -11,137 +11,143 @@
 
     body {
       font-family: 'AbletonSans', -apple-system, BlinkMacSystemFont, sans-serif;
-      font-size: 12px;
-      background: #4F4F4F;
-      color: #F2F2F2;
+      font-size: 10px;
+      font-weight: 700;
+      background: #474747;
+      color: #FFFFFF;
       display: flex;
       flex-direction: column;
       -webkit-font-smoothing: antialiased;
       user-select: none;
     }
 
+    /* ── Title bar ─────────────────────────────────────── */
     .title-bar {
       background: #2C2C2C;
-      border-bottom: 1px solid #686868;
+      border-bottom: 1px solid #3a3a3a;
       text-align: center;
       padding: 9px 0 8px;
+      font-size: 11px;
       font-weight: 700;
-      font-size: 13px;
-      color: #F2F2F2;
+      color: #FFFFFF;
       flex-shrink: 0;
     }
 
+    /* ── Content ───────────────────────────────────────── */
     .content {
       flex: 1;
-      padding: 8px 14px 10px;
+      padding: 10px 14px 8px;
+      display: flex;
+      flex-direction: column;
     }
 
     .section-label {
-      font-size: 10px;
+      font-size: 8px;
       font-weight: 700;
-      letter-spacing: 0.08em;
+      letter-spacing: 0.1em;
       text-transform: uppercase;
-      color: #686868;
-      margin-top: 10px;
-      margin-bottom: 5px;
+      color: #aaaaaa;
+      margin-bottom: 6px;
     }
-    .section-label:first-child { margin-top: 2px; }
 
-    .control { margin-bottom: 7px; }
+    .control { margin-bottom: 8px; }
 
     .control-header {
       display: flex;
       justify-content: space-between;
       align-items: baseline;
-      margin-bottom: 4px;
+      margin-bottom: 3px;
     }
 
-    .control-name { color: #F2F2F2; }
+    .control-name {
+      font-size: 10px;
+      font-weight: 700;
+      color: #FFFFFF;
+    }
 
     .control-value {
+      font-size: 10px;
       font-weight: 700;
       color: #FFAD56;
       font-variant-numeric: tabular-nums;
-      min-width: 54px;
+      min-width: 46px;
       text-align: right;
       cursor: pointer;
     }
-    .control-value:hover { opacity: 0.8; }
+    .control-value:hover { opacity: 0.75; }
 
     .control-value-edit {
-      width: 60px;
+      width: 52px;
       background: #2C2C2C;
       border: 1px solid #FFAD56;
       border-radius: 2px;
       color: #FFAD56;
       font-family: inherit;
-      font-size: 12px;
+      font-size: 10px;
       font-weight: 700;
       text-align: right;
-      padding: 0 4px;
+      padding: 1px 3px;
       font-variant-numeric: tabular-nums;
       outline: none;
     }
 
+    /* ── Sliders ───────────────────────────────────────── */
     input[type="range"] {
       -webkit-appearance: none;
       appearance: none;
       width: 100%;
-      height: 3px;
+      height: 2px;
       background: transparent;
       outline: none;
       cursor: pointer;
     }
 
     input[type="range"]::-webkit-slider-runnable-track {
-      height: 3px;
-      border-radius: 2px;
+      height: 2px;
+      border-radius: 1px;
       background: linear-gradient(
         to right,
         #FFAD56 0%,
         #FFAD56 var(--fill, 0%),
-        #686868 var(--fill, 0%),
-        #686868 100%
+        #555555 var(--fill, 0%),
+        #555555 100%
       );
     }
 
     input[type="range"]::-webkit-slider-thumb {
       -webkit-appearance: none;
       appearance: none;
-      width: 13px;
-      height: 13px;
+      width: 10px;
+      height: 10px;
       border-radius: 50%;
       background: #FFAD56;
-      margin-top: -5px;
+      margin-top: -4px;
       cursor: pointer;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.5);
     }
 
-    input[type="range"]:focus::-webkit-slider-thumb {
-      box-shadow: 0 0 0 3px rgba(255,173,86,0.3), 0 1px 3px rgba(0,0,0,0.5);
-    }
-
+    /* ── Dividers ──────────────────────────────────────── */
     .divider {
       height: 1px;
-      background: #686868;
-      margin: 8px 0 2px;
+      background: #3a3a3a;
+      margin: 8px 0;
     }
 
-    /* ── Checkbox option ───────────────────────────────────────── */
+    /* ── Checkboxes ────────────────────────────────────── */
     .option-row {
       display: flex;
       align-items: center;
       gap: 8px;
-      margin-top: 10px;
+      margin-bottom: 6px;
       cursor: pointer;
     }
+    .option-row:last-of-type { margin-bottom: 0; }
 
     .option-row input[type="checkbox"] {
       -webkit-appearance: none;
       appearance: none;
-      width: 13px;
-      height: 13px;
-      border: 1px solid #686868;
+      width: 12px;
+      height: 12px;
+      border: 1.5px solid #555555;
       border-radius: 2px;
       background: #2C2C2C;
       cursor: pointer;
@@ -159,50 +165,58 @@
       position: absolute;
       left: 2px;
       top: 0px;
-      width: 5px;
-      height: 8px;
-      border: 2px solid #2C2C2C;
+      width: 4px;
+      height: 7px;
+      border: 1.5px solid #2C2C2C;
       border-top: none;
       border-left: none;
       transform: rotate(45deg);
     }
 
-    .option-row label {
-      color: #F2F2F2;
-      cursor: pointer;
-      line-height: 1;
+    .option-row span {
+      font-size: 10px;
+      font-weight: 700;
+      color: #FFFFFF;
     }
 
-    /* ── Footer ────────────────────────────────────────────────── */
+    /* ── Warning ───────────────────────────────────────── */
+    .warning {
+      text-align: center;
+      font-size: 9px;
+      font-weight: 400;
+      color: #787878;
+      margin-top: 8px;
+    }
+
+    /* ── Footer ────────────────────────────────────────── */
     .footer {
       display: flex;
       gap: 6px;
-      padding: 8px 14px 10px;
-      background: #2C2C2C;
-      border-top: 1px solid #686868;
+      padding: 7px 14px 8px;
+      background: #474747;
+      border-top: 1px solid #3a3a3a;
       flex-shrink: 0;
     }
 
     button {
       flex: 1;
-      padding: 7px 0;
-      border-radius: 3px;
-      border: 1px solid #686868;
-      background: #4F4F4F;
-      color: #F2F2F2;
+      padding: 5px 0;
+      border-radius: 4px;
+      border: none;
+      background: #383838;
+      color: #FFFFFF;
       font-family: inherit;
-      font-size: 12px;
+      font-size: 10px;
       font-weight: 700;
       cursor: pointer;
-      transition: filter 0.08s;
+      transition: opacity 0.08s;
     }
-    button:active { filter: brightness(0.85); }
-    button:hover { filter: brightness(1.1); }
+    button:active { opacity: 0.65; }
+    button:hover  { opacity: 0.85; }
 
     .btn-run {
       background: #FFAD56;
       color: #2C2C2C;
-      border-color: #FFAD56;
     }
   </style>
 </head>
@@ -211,6 +225,7 @@
   <div class="title-bar">Strip Silence</div>
 
   <div class="content">
+
     <p class="section-label">Detection</p>
 
     <div class="control">
@@ -230,6 +245,7 @@
     </div>
 
     <div class="divider"></div>
+
     <p class="section-label">Rolls</p>
 
     <div class="control">
@@ -260,11 +276,13 @@
       <span>Ripple edit</span>
     </label>
 
+    <p class="warning">This action will stop audio.</p>
+
   </div>
 
   <div class="footer">
-    <button class="btn-cancel" onclick="cancel()">Cancel</button>
     <button class="btn-run" onclick="run()">Strip Silence</button>
+    <button onclick="cancel()">Cancel</button>
   </div>
 
   <script>

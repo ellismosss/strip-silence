@@ -351,7 +351,7 @@ export function activate(activation: ActivationContext) {
       .replace("__RIPPLE_CHECKED__", saved.rippleEdit   ? "checked" : "");
 
     const raw = await context.ui
-      .showModalDialog(`data:text/html,${encodeURIComponent(dialogHtml)}`, 320, 400)
+      .showModalDialog(`data:text/html,${encodeURIComponent(dialogHtml)}`, 260, 340)
       .catch(() => "");
 
     if (!raw) return null;
