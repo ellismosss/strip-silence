@@ -4,7 +4,7 @@ An [Ableton Live](https://www.ableton.com) extension that removes silence from a
 
 ## Installation
 
-1. Download **`Strip-Silence-1.0.31.ablx`** from this page
+1. Download **`Strip-Silence-1.0.33.ablx`** from this page
 2. Open Ableton Live → **Preferences → Extensions**
 3. Drag and drop the `.ablx` file onto the Extensions page
 
@@ -13,12 +13,17 @@ Requires the Ableton Live beta build that supports Extensions.
 ## Features
 
 - Detects and removes silent regions from one or more audio tracks
+- Works with both **AIFF and WAV** renders (follows your Record/Warp/Launch preference)
 - Configurable threshold, minimum silence duration, pre-roll, and post-roll
 - Option to snap cuts to the nearest beat
-- Ripple edit option — automatically closes the gaps after stripping, sliding clips together
+- **Ripple edit** — automatically closes the gaps after stripping, sliding clips together
+- Automatically removes silent roll-artifact clips left behind after stripping
+- Two-pass detection: fast 100 ms coarse scan + precise 20 ms boundary refinement
 - Right-click an arrangement time selection to process one or more tracks simultaneously
 - Right-click a track header to process the full track automatically
+- Renders only clip extents — skips empty gaps for faster processing
 - Remembers your last-used settings between sessions
+- Styled with Ableton's own UI font and colour palette
 
 ## Usage
 

@@ -207,7 +207,13 @@ function parseAudioFileMeta(buf: Buffer): AudioFileMeta {
   throw new Error(`Unrecognised audio file signature: "${sig}" — expected AIFF (FORM) or WAV (RIFF)`);
 }
 
-// ── Silence detection ─────────────────────────────────────────────────────────
+// ── Two-pass silence detection ────────────────────────────────────────────────
+// Pass 1 — coarse 100 ms windows over the whole file: cheap, finds all silence
+//           regions. Interior windows are either clearly silent or clearly loud
+//           and need no further work.
+// Pass 2 — fine 20 ms windows, but ONLY on the ±1 coarse window around each
+//           silence boundary. This gives sub-20 ms precision on cut points while
+//           skipping analysis of all the audio in between.
 
 async function detectSilenceStreaming(
   filePath: string,
@@ -216,98 +222,135 @@ async function detectSilenceStreaming(
 ): Promise<SilenceRange[]> {
   const fd = await fs.open(filePath, "r");
   try {
-    // 64 KB is always enough to hold any AIFF or WAV header
     const headerBuf = Buffer.allocUnsafe(65536);
     await fd.read(headerBuf, 0, headerBuf.length, 0);
 
     const meta = parseAudioFileMeta(headerBuf);
     const { sampleRate, numChannels, sampleSize, isFloat, numFrames, pcmByteOffset, littleEndian: le } = meta;
 
-    const bytesPerSample  = Math.ceil(sampleSize / 8);
-    const bytesPerFrame   = bytesPerSample * numChannels;
-    const windowFrames    = Math.max(1, Math.floor(sampleRate * 0.02)); // 20 ms
-    const windowDuration  = windowFrames / sampleRate;
-    const windowBytes     = windowFrames * bytesPerFrame;
-    const windowSamples   = windowFrames * numChannels;
-    const minWindows      = Math.ceil(minSilenceDuration / windowDuration);
-    const threshSq        = rmsThreshold * rmsThreshold;
-    const maxWindowSumSq  = threshSq * windowSamples;
-
-    const windowsPerChunk = Math.max(1, Math.floor(CHUNK_TARGET_BYTES / windowBytes));
-    const chunkBytes      = windowsPerChunk * windowBytes;
-    const chunkBuf        = Buffer.allocUnsafe(chunkBytes);
-
-    const silent: boolean[] = [];
-    let filePos = pcmByteOffset;
-    const fileEnd = numFrames > 0
+    const bytesPerSample = Math.ceil(sampleSize / 8);
+    const bytesPerFrame  = bytesPerSample * numChannels;
+    const threshSq       = rmsThreshold * rmsThreshold;
+    const fileEnd        = numFrames > 0
       ? pcmByteOffset + numFrames * bytesPerFrame
-      : Number.MAX_SAFE_INTEGER; // streamed WAV: read until EOF
+      : Number.MAX_SAFE_INTEGER;
 
-    while (filePos < fileEnd) {
-      const toRead  = Math.min(chunkBytes, fileEnd - filePos);
-      const aligned = Math.floor(toRead / windowBytes) * windowBytes;
-      if (aligned === 0) break;
+    // ── Shared scanner: stream [fromByte, toBytes) with wFrames-sized windows ──
+    // Returns a boolean[] — true = silent — one entry per complete window.
+    async function scanBytes(fromByte: number, toByte: number, wFrames: number): Promise<boolean[]> {
+      const wBytes      = wFrames * bytesPerFrame;
+      const wSamples    = wFrames * numChannels;
+      const maxSumSq    = threshSq * wSamples;
+      const wPerChunk   = Math.max(1, Math.floor(CHUNK_TARGET_BYTES / wBytes));
+      const chunkBytes  = wPerChunk * wBytes;
+      const buf         = Buffer.allocUnsafe(chunkBytes);
+      const result: boolean[] = [];
 
-      const { bytesRead } = await fd.read(chunkBuf, 0, aligned, filePos);
-      if (bytesRead === 0) break;
-      filePos += bytesRead;
+      let pos = fromByte;
+      while (pos < toByte) {
+        const toRead  = Math.min(chunkBytes, toByte - pos);
+        const aligned = Math.floor(toRead / wBytes) * wBytes;
+        if (aligned === 0) break;
+        const { bytesRead } = await fd.read(buf, 0, aligned, pos);
+        if (bytesRead === 0) break;
+        pos += bytesRead;
 
-      const windowsInChunk = Math.floor(bytesRead / windowBytes);
+        const numW = Math.floor(bytesRead / wBytes);
+        for (let w = 0; w < numW; w++) {
+          const base   = w * wBytes;
+          let sumSq    = 0;
+          let isSilent = true;
 
-      for (let w = 0; w < windowsInChunk; w++) {
-        const base   = w * windowBytes;
-        let sumSq    = 0;
-        let isSilent = true;
+          outer: for (let f = 0; f < wFrames; f++) {
+            for (let c = 0; c < numChannels; c++) {
+              const b = base + (f * numChannels + c) * bytesPerSample;
+              let v: number;
 
-        outer: for (let f = 0; f < windowFrames; f++) {
-          for (let c = 0; c < numChannels; c++) {
-            const b = base + (f * numChannels + c) * bytesPerSample;
-            let v: number;
-
-            if (isFloat && sampleSize === 32) {
-              // 32-bit IEEE float (common in Ableton WAV renders)
-              v = le ? chunkBuf.readFloatLE(b) : chunkBuf.readFloatBE(b);
-            } else if (sampleSize === 24) {
-              let i: number;
-              if (le) {
-                i = chunkBuf[b]! | (chunkBuf[b + 1]! << 8) | (chunkBuf[b + 2]! << 16);
+              if (isFloat && sampleSize === 32) {
+                v = le ? buf.readFloatLE(b) : buf.readFloatBE(b);
+              } else if (sampleSize === 24) {
+                let i = le
+                  ? buf[b]! | (buf[b + 1]! << 8) | (buf[b + 2]! << 16)
+                  : (buf[b]! << 16) | (buf[b + 1]! << 8) | buf[b + 2]!;
+                if (i & 0x800000) i |= ~0xFFFFFF;
+                v = i / 8388608;
+              } else if (sampleSize === 16) {
+                const u = le
+                  ? buf[b]! | (buf[b + 1]! << 8)
+                  : (buf[b]! << 8) | buf[b + 1]!;
+                v = (u > 32767 ? u - 65536 : u) / 32768;
+              } else if (sampleSize === 32) {
+                const u = le
+                  ? buf[b]! | (buf[b + 1]! << 8) | (buf[b + 2]! << 16) | (buf[b + 3]! << 24)
+                  : (buf[b]! << 24) | (buf[b + 1]! << 16) | (buf[b + 2]! << 8) | buf[b + 3]!;
+                v = u / 2147483648;
               } else {
-                i = (chunkBuf[b]! << 16) | (chunkBuf[b + 1]! << 8) | chunkBuf[b + 2]!;
+                v = 0;
               }
-              if (i & 0x800000) i |= ~0xFFFFFF; // sign-extend
-              v = i / 8388608;
-            } else if (sampleSize === 16) {
-              const u = le
-                ? chunkBuf[b]! | (chunkBuf[b + 1]! << 8)
-                : (chunkBuf[b]! << 8) | chunkBuf[b + 1]!;
-              v = (u > 32767 ? u - 65536 : u) / 32768;
-            } else if (sampleSize === 32) {
-              // 32-bit integer PCM
-              const u = le
-                ? chunkBuf[b]! | (chunkBuf[b + 1]! << 8) | (chunkBuf[b + 2]! << 16) | (chunkBuf[b + 3]! << 24)
-                : (chunkBuf[b]! << 24) | (chunkBuf[b + 1]! << 16) | (chunkBuf[b + 2]! << 8) | chunkBuf[b + 3]!;
-              v = u / 2147483648;
-            } else {
-              v = 0;
+
+              sumSq += v * v;
+              if (sumSq > maxSumSq) { isSilent = false; break outer; }
             }
-
-            sumSq += v * v;
-            if (sumSq > maxWindowSumSq) { isSilent = false; break outer; }
           }
+          result.push(isSilent);
         }
+      }
+      return result;
+    }
 
-        silent.push(isSilent);
+    // ── Pass 1: coarse 100 ms scan ────────────────────────────────────────────
+    const coarseFrames = Math.max(1, Math.floor(sampleRate * 0.1));
+    const coarseDur    = coarseFrames / sampleRate;
+    const coarseBytes  = coarseFrames * bytesPerFrame;
+    const coarseMinW   = Math.ceil(minSilenceDuration / coarseDur);
+
+    const coarse = await scanBytes(pcmByteOffset, fileEnd, coarseFrames);
+
+    // Collect coarse silence runs (as window-index pairs [start, end))
+    const coarseRuns: Array<[number, number]> = [];
+    let rStart = -1;
+    for (let i = 0; i <= coarse.length; i++) {
+      if (i < coarse.length && coarse[i]) {
+        if (rStart === -1) rStart = i;
+      } else if (rStart !== -1) {
+        if (i - rStart >= coarseMinW) coarseRuns.push([rStart, i]);
+        rStart = -1;
       }
     }
 
+    if (coarseRuns.length === 0) return [];
+
+    // ── Pass 2: refine each boundary with 20 ms windows ──────────────────────
+    // Only ±1 coarse window (±100 ms) around the start and end of each run.
+    const fineFrames = Math.max(1, Math.floor(sampleRate * 0.02));
+    const fineDur    = fineFrames / sampleRate;
+
     const ranges: SilenceRange[] = [];
-    let runStart = -1;
-    for (let i = 0; i <= silent.length; i++) {
-      if (i < silent.length && silent[i]) {
-        if (runStart === -1) runStart = i;
-      } else if (runStart !== -1) {
-        if (i - runStart >= minWindows) ranges.push({ start: runStart * windowDuration, end: i * windowDuration });
-        runStart = -1;
+
+    for (const [runS, runE] of coarseRuns) {
+      // Start boundary: coarse windows [runS-1, runS+1) → find first silent fine window
+      const sBoundaryFrom = Math.max(pcmByteOffset, pcmByteOffset + (runS - 1) * coarseBytes);
+      const sBoundaryTo   = Math.min(fileEnd,        pcmByteOffset + (runS + 1) * coarseBytes);
+      const sFine = await scanBytes(sBoundaryFrom, sBoundaryTo, fineFrames);
+      const sFineFirst = sFine.indexOf(true);
+      const sOffsetSec = (sBoundaryFrom - pcmByteOffset) / bytesPerFrame / sampleRate;
+      const preciseStart = sFineFirst >= 0
+        ? sOffsetSec + sFineFirst * fineDur
+        : runS * coarseDur; // fallback to coarse if fine finds nothing
+
+      // End boundary: coarse windows [runE-1, runE+1) → find last silent fine window
+      const eBoundaryFrom = Math.max(pcmByteOffset, pcmByteOffset + (runE - 1) * coarseBytes);
+      const eBoundaryTo   = Math.min(fileEnd,        pcmByteOffset + (runE + 1) * coarseBytes);
+      const eFine = await scanBytes(eBoundaryFrom, eBoundaryTo, fineFrames);
+      let eFineLast = -1;
+      for (let i = eFine.length - 1; i >= 0; i--) { if (eFine[i]) { eFineLast = i; break; } }
+      const eOffsetSec = (eBoundaryFrom - pcmByteOffset) / bytesPerFrame / sampleRate;
+      const preciseEnd = eFineLast >= 0
+        ? eOffsetSec + (eFineLast + 1) * fineDur
+        : runE * coarseDur; // fallback
+
+      if (preciseEnd - preciseStart > 0.001) {
+        ranges.push({ start: preciseStart, end: preciseEnd });
       }
     }
 
@@ -329,6 +372,81 @@ function applyRolls(ranges: SilenceRange[], preRollMs: number, postRollMs: numbe
 
 function dbToLinear(db: number): number {
   return Math.pow(10, db / 20);
+}
+
+// ── Silent-artifact checker ───────────────────────────────────────────────────
+// After silence stripping, pre/post-roll leaves tiny clips that contain only
+// silence (e.g. a 50 ms clip at the very start of a stem). This reads the audio
+// and confirms they are truly empty before deleting them.
+
+async function isClipEntirelyBelowThreshold(
+  clip: AudioClip<"1.0.0">,
+  rmsThreshold: number,
+  secondsPerBeat: number,
+): Promise<boolean> {
+  const fileStartSec = clip.startMarker * secondsPerBeat;
+  const clipDurSec   = clip.duration   * secondsPerBeat;
+
+  let fd: Awaited<ReturnType<typeof fs.open>> | null = null;
+  try {
+    fd = await fs.open(clip.filePath, "r");
+
+    const headerBuf = Buffer.allocUnsafe(65536);
+    await fd.read(headerBuf, 0, headerBuf.length, 0);
+    const { sampleRate, numChannels, sampleSize, isFloat, numFrames, pcmByteOffset, littleEndian: le } =
+      parseAudioFileMeta(headerBuf);
+
+    const bps = Math.ceil(sampleSize / 8);
+    const bpf = bps * numChannels;
+
+    const startFrame = Math.max(0, Math.round(fileStartSec * sampleRate));
+    const endFrame   = Math.min(
+      numFrames > 0 ? numFrames : Number.MAX_SAFE_INTEGER,
+      startFrame + Math.ceil(clipDurSec * sampleRate),
+    );
+    const numBytes = (endFrame - startFrame) * bpf;
+    if (numBytes <= 0) return true;
+
+    const buf = Buffer.allocUnsafe(numBytes);
+    const { bytesRead } = await fd.read(buf, 0, numBytes, pcmByteOffset + startFrame * bpf);
+
+    const threshSq     = rmsThreshold * rmsThreshold;
+    const totalFrames  = Math.floor(bytesRead / bpf);
+
+    for (let f = 0; f < totalFrames; f++) {
+      for (let c = 0; c < numChannels; c++) {
+        const b = (f * numChannels + c) * bps;
+        let v: number;
+
+        if (isFloat && sampleSize === 32) {
+          v = le ? buf.readFloatLE(b) : buf.readFloatBE(b);
+        } else if (sampleSize === 24) {
+          let i = le
+            ? buf[b]! | (buf[b + 1]! << 8) | (buf[b + 2]! << 16)
+            : (buf[b]! << 16) | (buf[b + 1]! << 8) | buf[b + 2]!;
+          if (i & 0x800000) i |= ~0xFFFFFF;
+          v = i / 8388608;
+        } else if (sampleSize === 16) {
+          const u = le ? buf[b]! | (buf[b + 1]! << 8) : (buf[b]! << 8) | buf[b + 1]!;
+          v = (u > 32767 ? u - 65536 : u) / 32768;
+        } else if (sampleSize === 32) {
+          const u = le
+            ? buf[b]! | (buf[b + 1]! << 8) | (buf[b + 2]! << 16) | (buf[b + 3]! << 24)
+            : (buf[b]! << 24) | (buf[b + 1]! << 16) | (buf[b + 2]! << 8) | buf[b + 3]!;
+          v = u / 2147483648;
+        } else {
+          v = 0;
+        }
+
+        if (v * v > threshSq) return false; // found audio above threshold
+      }
+    }
+    return true; // entirely below threshold
+  } catch {
+    return false; // can't read = play it safe, don't delete
+  } finally {
+    await fd?.close();
+  }
 }
 
 // ── Extension entry point ─────────────────────────────────────────────────────
@@ -475,6 +593,38 @@ export function activate(activation: ActivationContext) {
       );
 
       await Promise.all(promises);
+
+      // ── Remove silent roll artifacts ──────────────────────────────────────
+      // Pre/post-roll can leave tiny clips (≤ roll duration) that contain only
+      // silence — e.g. a 50 ms clip at the very start of a stem. Verify each
+      // short clip's audio is truly below threshold before deleting it.
+      if (pending.length) {
+        update("Cleaning up…", 88);
+        const maxArtifactSec = Math.max(opts.preRollMs, opts.postRollMs) / 1000;
+        const uniqueTracks = [...new Set(pending.map(p => p.track))];
+
+        for (const track of uniqueTracks) {
+          const shortClips = track.arrangementClips
+            .filter(c =>
+              c instanceof AudioClip &&
+              c.startTime >= selectionStart - 0.001 &&
+              c.endTime   <= selectionEnd   + 0.001 &&
+              c.duration * secondsPerBeat <= maxArtifactSec + 0.001
+            )
+            .filter((c): c is AudioClip<"1.0.0"> => c instanceof AudioClip);
+
+          for (const clip of shortClips) {
+            const silent = await isClipEntirelyBelowThreshold(clip, rmsThreshold, secondsPerBeat);
+            if (silent) {
+              try {
+                await context.withinTransaction(() => track.deleteClip(clip));
+                console.log(`[Strip Silence] Removed silent artifact "${clip.name}" (${(clip.duration * secondsPerBeat * 1000).toFixed(0)} ms)`);
+              } catch { /* skip */ }
+            }
+          }
+        }
+      }
+
       // ── Ripple edit ──────────────────────────────────────────────────────
       if (opts.rippleEdit && pending.length) {
         update("Ripple editing…", 92);
