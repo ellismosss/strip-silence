@@ -17,6 +17,7 @@ interface StripSilenceOptions {
   preRollMs: number;
   postRollMs: number;
   snapToBeats: boolean;
+
 }
 
 const DEFAULTS: StripSilenceOptions = {
@@ -25,6 +26,7 @@ const DEFAULTS: StripSilenceOptions = {
   preRollMs: 50,
   postRollMs: 50,
   snapToBeats: false,
+
 };
 
 interface SilenceRange {
@@ -94,15 +96,25 @@ async function saveSettings(storageDir: string | undefined, opts: StripSilenceOp
   await fs.writeFile(path.join(storageDir, "settings.json"), JSON.stringify(opts, null, 2)).catch(() => {});
 }
 
-// ── AIFF parser ───────────────────────────────────────────────────────────────
+// ── Audio file streaming silence detector ────────────────────────────────────
+// Supports both AIFF (big-endian, macOS default) and WAV (little-endian, used
+// when the user has "Record, Warp & Launch" set to WAV in Ableton preferences).
+// Reads in 10 MB chunks — peak memory stays flat regardless of file size.
 
-interface AiffInfo {
+const CHUNK_TARGET_BYTES = 10 * 1024 * 1024;
+
+/** Unified metadata for both AIFF and WAV renders. */
+interface AudioFileMeta {
   sampleRate: number;
   numChannels: number;
-  sampleSize: number;
+  sampleSize: number;    // bits per sample
+  isFloat: boolean;      // true for 32-bit IEEE float (WAV format type 3)
   numFrames: number;
-  pcmData: Buffer;
+  pcmByteOffset: number; // absolute byte position where PCM data begins
+  littleEndian: boolean; // true = WAV, false = AIFF
 }
+
+// ── AIFF (big-endian, FORM/AIFF container) ───────────────────────────────────
 
 function readExtendedFloat(buf: Buffer, offset: number): number {
   const exp = (buf.readUInt16BE(offset) & 0x7FFF) - 16383;
@@ -111,96 +123,196 @@ function readExtendedFloat(buf: Buffer, offset: number): number {
   return mantHi * Math.pow(2, exp - 31) + mantLo * Math.pow(2, exp - 63);
 }
 
-function parseAiff(buf: Buffer): AiffInfo {
+function parseAiffMeta(buf: Buffer): AudioFileMeta {
   if (buf.toString("ascii", 0, 4) !== "FORM") throw new Error("Not a FORM file");
   const formType = buf.toString("ascii", 8, 12);
-  if (formType !== "AIFF" && formType !== "AIFC") throw new Error(`Unsupported form type: ${formType}`);
+  if (formType !== "AIFF" && formType !== "AIFC") throw new Error(`Unsupported AIFF variant: ${formType}`);
 
-  let numChannels = 0, sampleRate = 0, sampleSize = 0, numFrames = 0;
-  let pcmData: Buffer | null = null;
-
+  let numChannels = 0, sampleRate = 0, sampleSize = 0, numFrames = 0, pcmByteOffset = -1;
   let pos = 12;
+
   while (pos + 8 <= buf.length) {
-    const id = buf.toString("ascii", pos, pos + 4);
-    const chunkSize = buf.readUInt32BE(pos + 4);
+    const id        = buf.toString("ascii", pos, pos + 4);
+    const chunkSz   = buf.readUInt32BE(pos + 4);
     const dataStart = pos + 8;
 
     if (id === "COMM") {
       numChannels = buf.readUInt16BE(dataStart);
-      numFrames = buf.readUInt32BE(dataStart + 2);
-      sampleSize = buf.readUInt16BE(dataStart + 6);
-      sampleRate = readExtendedFloat(buf, dataStart + 8);
+      numFrames   = buf.readUInt32BE(dataStart + 2);
+      sampleSize  = buf.readUInt16BE(dataStart + 6);
+      sampleRate  = readExtendedFloat(buf, dataStart + 8);
     } else if (id === "SSND") {
-      const pcmOffset = buf.readUInt32BE(dataStart);
-      pcmData = buf.subarray(dataStart + 8 + pcmOffset);
+      const pcmOffset = buf.readUInt32BE(dataStart); // usually 0
+      pcmByteOffset   = dataStart + 8 + pcmOffset;
     }
 
-    pos = dataStart + chunkSize;
+    if (numChannels && pcmByteOffset >= 0) break;
+
+    pos = dataStart + chunkSz;
     if (pos & 1) pos++;
   }
 
-  if (!pcmData || !numChannels || !sampleRate) throw new Error("AIFF: missing COMM or SSND chunk");
-  return { sampleRate, numChannels, sampleSize, numFrames, pcmData };
+  if (pcmByteOffset < 0 || !numChannels || !sampleRate) throw new Error("AIFF: missing COMM or SSND chunk");
+  return { sampleRate, numChannels, sampleSize, isFloat: false, numFrames, pcmByteOffset, littleEndian: false };
+}
+
+// ── WAV (little-endian, RIFF/WAVE container) ─────────────────────────────────
+
+function parseWavMeta(buf: Buffer): AudioFileMeta {
+  if (buf.toString("ascii", 0, 4) !== "RIFF") throw new Error("Not a RIFF file");
+  if (buf.toString("ascii", 8, 12) !== "WAVE") throw new Error("Not a WAVE file");
+
+  let numChannels = 0, sampleRate = 0, sampleSize = 0, numFrames = 0, pcmByteOffset = -1;
+  let isFloat = false, dataBytes = 0;
+  let pos = 12;
+
+  while (pos + 8 <= buf.length) {
+    const id        = buf.toString("ascii", pos, pos + 4);
+    const chunkSz   = buf.readUInt32LE(pos + 4); // WAV is little-endian
+    const dataStart = pos + 8;
+
+    if (id === "fmt ") {
+      const audioFmt = buf.readUInt16LE(dataStart);
+      isFloat      = audioFmt === 3;             // 1 = PCM int, 3 = IEEE float
+      numChannels  = buf.readUInt16LE(dataStart + 2);
+      sampleRate   = buf.readUInt32LE(dataStart + 4);
+      sampleSize   = buf.readUInt16LE(dataStart + 14);
+    } else if (id === "data") {
+      pcmByteOffset = dataStart;
+      dataBytes     = chunkSz === 0xFFFFFFFF ? 0 : chunkSz; // 0xFFFFFFFF = streamed/unknown
+    }
+
+    if (pcmByteOffset >= 0 && numChannels && sampleRate) break;
+
+    pos = dataStart + chunkSz;
+    if (pos & 1) pos++;
+  }
+
+  if (pcmByteOffset < 0 || !numChannels || !sampleRate) throw new Error("WAV: missing fmt or data chunk");
+
+  const bytesPerFrame = Math.ceil(sampleSize / 8) * numChannels;
+  numFrames = dataBytes > 0 ? Math.floor(dataBytes / bytesPerFrame) : 0;
+
+  return { sampleRate, numChannels, sampleSize, isFloat, numFrames, pcmByteOffset, littleEndian: true };
+}
+
+// ── Format dispatcher ─────────────────────────────────────────────────────────
+
+function parseAudioFileMeta(buf: Buffer): AudioFileMeta {
+  const sig = buf.toString("ascii", 0, 4);
+  if (sig === "FORM") return parseAiffMeta(buf);
+  if (sig === "RIFF") return parseWavMeta(buf);
+  throw new Error(`Unrecognised audio file signature: "${sig}" — expected AIFF (FORM) or WAV (RIFF)`);
 }
 
 // ── Silence detection ─────────────────────────────────────────────────────────
 
-function detectSilenceFromAiff(info: AiffInfo, rmsThreshold: number, minSilenceDuration: number): SilenceRange[] {
-  const { sampleRate, numChannels, sampleSize, pcmData } = info;
-  const bytesPerSample = Math.ceil(sampleSize / 8);
-  const bytesPerFrame = bytesPerSample * numChannels;
-  const totalFrames = Math.floor(pcmData.length / bytesPerFrame);
+async function detectSilenceStreaming(
+  filePath: string,
+  rmsThreshold: number,
+  minSilenceDuration: number,
+): Promise<SilenceRange[]> {
+  const fd = await fs.open(filePath, "r");
+  try {
+    // 64 KB is always enough to hold any AIFF or WAV header
+    const headerBuf = Buffer.allocUnsafe(65536);
+    await fd.read(headerBuf, 0, headerBuf.length, 0);
 
-  const windowFrames = Math.max(1, Math.floor(sampleRate * 0.01));
-  const windowDuration = windowFrames / sampleRate;
-  const minWindows = Math.ceil(minSilenceDuration / windowDuration);
-  const threshSq = rmsThreshold * rmsThreshold;
+    const meta = parseAudioFileMeta(headerBuf);
+    const { sampleRate, numChannels, sampleSize, isFloat, numFrames, pcmByteOffset, littleEndian: le } = meta;
 
-  const silent: boolean[] = [];
+    const bytesPerSample  = Math.ceil(sampleSize / 8);
+    const bytesPerFrame   = bytesPerSample * numChannels;
+    const windowFrames    = Math.max(1, Math.floor(sampleRate * 0.02)); // 20 ms
+    const windowDuration  = windowFrames / sampleRate;
+    const windowBytes     = windowFrames * bytesPerFrame;
+    const windowSamples   = windowFrames * numChannels;
+    const minWindows      = Math.ceil(minSilenceDuration / windowDuration);
+    const threshSq        = rmsThreshold * rmsThreshold;
+    const maxWindowSumSq  = threshSq * windowSamples;
 
-  for (let frameIdx = 0; frameIdx < totalFrames; frameIdx += windowFrames) {
-    const frameEnd = Math.min(frameIdx + windowFrames, totalFrames);
-    let sumSq = 0, count = 0;
+    const windowsPerChunk = Math.max(1, Math.floor(CHUNK_TARGET_BYTES / windowBytes));
+    const chunkBytes      = windowsPerChunk * windowBytes;
+    const chunkBuf        = Buffer.allocUnsafe(chunkBytes);
 
-    for (let f = frameIdx; f < frameEnd; f++) {
-      for (let c = 0; c < numChannels; c++) {
-        const b = (f * numChannels + c) * bytesPerSample;
-        let v: number;
+    const silent: boolean[] = [];
+    let filePos = pcmByteOffset;
+    const fileEnd = numFrames > 0
+      ? pcmByteOffset + numFrames * bytesPerFrame
+      : Number.MAX_SAFE_INTEGER; // streamed WAV: read until EOF
 
-        if (sampleSize === 24) {
-          let i = (pcmData[b]! << 16) | (pcmData[b + 1]! << 8) | pcmData[b + 2]!;
-          if (i & 0x800000) i |= ~0xFFFFFF;
-          v = i / 8388608;
-        } else if (sampleSize === 16) {
-          const u = (pcmData[b]! << 8) | pcmData[b + 1]!;
-          v = (u > 32767 ? u - 65536 : u) / 32768;
-        } else if (sampleSize === 32) {
-          const u = (pcmData[b]! << 24) | (pcmData[b + 1]! << 16) | (pcmData[b + 2]! << 8) | pcmData[b + 3]!;
-          v = u / 2147483648;
-        } else {
-          v = 0;
+    while (filePos < fileEnd) {
+      const toRead  = Math.min(chunkBytes, fileEnd - filePos);
+      const aligned = Math.floor(toRead / windowBytes) * windowBytes;
+      if (aligned === 0) break;
+
+      const { bytesRead } = await fd.read(chunkBuf, 0, aligned, filePos);
+      if (bytesRead === 0) break;
+      filePos += bytesRead;
+
+      const windowsInChunk = Math.floor(bytesRead / windowBytes);
+
+      for (let w = 0; w < windowsInChunk; w++) {
+        const base   = w * windowBytes;
+        let sumSq    = 0;
+        let isSilent = true;
+
+        outer: for (let f = 0; f < windowFrames; f++) {
+          for (let c = 0; c < numChannels; c++) {
+            const b = base + (f * numChannels + c) * bytesPerSample;
+            let v: number;
+
+            if (isFloat && sampleSize === 32) {
+              // 32-bit IEEE float (common in Ableton WAV renders)
+              v = le ? chunkBuf.readFloatLE(b) : chunkBuf.readFloatBE(b);
+            } else if (sampleSize === 24) {
+              let i: number;
+              if (le) {
+                i = chunkBuf[b]! | (chunkBuf[b + 1]! << 8) | (chunkBuf[b + 2]! << 16);
+              } else {
+                i = (chunkBuf[b]! << 16) | (chunkBuf[b + 1]! << 8) | chunkBuf[b + 2]!;
+              }
+              if (i & 0x800000) i |= ~0xFFFFFF; // sign-extend
+              v = i / 8388608;
+            } else if (sampleSize === 16) {
+              const u = le
+                ? chunkBuf[b]! | (chunkBuf[b + 1]! << 8)
+                : (chunkBuf[b]! << 8) | chunkBuf[b + 1]!;
+              v = (u > 32767 ? u - 65536 : u) / 32768;
+            } else if (sampleSize === 32) {
+              // 32-bit integer PCM
+              const u = le
+                ? chunkBuf[b]! | (chunkBuf[b + 1]! << 8) | (chunkBuf[b + 2]! << 16) | (chunkBuf[b + 3]! << 24)
+                : (chunkBuf[b]! << 24) | (chunkBuf[b + 1]! << 16) | (chunkBuf[b + 2]! << 8) | chunkBuf[b + 3]!;
+              v = u / 2147483648;
+            } else {
+              v = 0;
+            }
+
+            sumSq += v * v;
+            if (sumSq > maxWindowSumSq) { isSilent = false; break outer; }
+          }
         }
 
-        sumSq += v * v;
-        count++;
+        silent.push(isSilent);
       }
     }
 
-    silent.push(count > 0 ? sumSq / count < threshSq : true);
-  }
-
-  const ranges: SilenceRange[] = [];
-  let runStart = -1;
-  for (let i = 0; i <= silent.length; i++) {
-    if (i < silent.length && silent[i]) {
-      if (runStart === -1) runStart = i;
-    } else if (runStart !== -1) {
-      if (i - runStart >= minWindows) ranges.push({ start: runStart * windowDuration, end: i * windowDuration });
-      runStart = -1;
+    const ranges: SilenceRange[] = [];
+    let runStart = -1;
+    for (let i = 0; i <= silent.length; i++) {
+      if (i < silent.length && silent[i]) {
+        if (runStart === -1) runStart = i;
+      } else if (runStart !== -1) {
+        if (i - runStart >= minWindows) ranges.push({ start: runStart * windowDuration, end: i * windowDuration });
+        runStart = -1;
+      }
     }
-  }
 
-  return ranges;
+    return ranges;
+  } finally {
+    await fd.close();
+  }
 }
 
 // ── Roll adjustment ───────────────────────────────────────────────────────────
@@ -257,44 +369,84 @@ export function activate(activation: ActivationContext) {
     selectionEnd: number,
     opts: StripSilenceOptions,
   ): Promise<void> {
-    const rmsThreshold = dbToLinear(opts.thresholdDb);
+    const rmsThreshold   = dbToLinear(opts.thresholdDb);
     const snapBeat = (b: number) => opts.snapToBeats ? Math.round(b) : b;
 
     await context.ui.withinProgressDialog("Strip Silence", {}, async (update, signal) => {
-      // Renders must be sequential — Live cannot handle concurrent render requests
-      // inside a progress dialog without freezing. We pipeline by kicking off each
-      // track's file-read + analysis immediately after its render completes, so
-      // track N's analysis overlaps with track N+1's render.
-      type PendingResult = { track: AudioTrack<"1.0.0">; ranges: SilenceRange[] } | null;
-      const analysisTasks: Promise<PendingResult>[] = [];
+      const secondsPerBeat = 60 / context.application.song.tempo;
 
-      for (let i = 0; i < tracks.length; i++) {
-        if (signal.aborted) break;
-        const track = tracks[i]!;
-        update(`Rendering (${i + 1}/${tracks.length})`, (i / tracks.length) * 70);
+      // Build per-track render segments: merge clip extents so we skip empty gaps.
+      // A selection spanning 5 min but containing only 90 s of clips renders 90 s,
+      // not 5 min. Clips are merged so overlapping ones aren't rendered twice.
+      type Segment = { track: AudioTrack<"1.0.0">; start: number; end: number };
+      const segments: Segment[] = [];
 
-        let aifPath: string;
-        try {
-          aifPath = await context.resources.renderPreFxAudio(track, selectionStart, selectionEnd);
-        } catch (e) {
-          console.error(`[Strip Silence] Render failed for "${track.name}":`, e);
+      for (const track of tracks) {
+        const clips = track.arrangementClips
+          .filter(c => c.startTime < selectionEnd && c.endTime > selectionStart)
+          .sort((a, b) => a.startTime - b.startTime);
+
+        if (!clips.length) {
+          // No clips in range — fall back to rendering the full selection
+          segments.push({ track, start: selectionStart, end: selectionEnd });
           continue;
         }
 
-        // Start analysis without awaiting — it runs while the next track renders
+        // Merge overlapping/adjacent clip extents into minimal render segments
+        let segStart = Math.max(clips[0]!.startTime, selectionStart);
+        let segEnd   = Math.min(clips[0]!.endTime,   selectionEnd);
+
+        for (let i = 1; i < clips.length; i++) {
+          const cs = Math.max(clips[i]!.startTime, selectionStart);
+          const ce = Math.min(clips[i]!.endTime,   selectionEnd);
+          if (cs <= segEnd) {
+            segEnd = Math.max(segEnd, ce); // extend current segment
+          } else {
+            segments.push({ track, start: segStart, end: segEnd });
+            segStart = cs;
+            segEnd   = ce;
+          }
+        }
+        segments.push({ track, start: segStart, end: segEnd });
+      }
+
+      // Result type: beat ranges already converted, ready for clearClipsInRange
+      type BeatRange = { start: number; end: number };
+      type PendingResult = { track: AudioTrack<"1.0.0">; beatRanges: BeatRange[] } | null;
+      const analysisTasks: Promise<PendingResult>[] = [];
+
+      for (let i = 0; i < segments.length; i++) {
+        if (signal.aborted) break;
+        const { track, start: segStart, end: segEnd } = segments[i]!;
+        update(`Rendering (${i + 1}/${segments.length})`, (i / segments.length) * 70);
+
+        let aifPath: string;
+        try {
+          aifPath = await context.resources.renderPreFxAudio(track, segStart, segEnd);
+        } catch (e) {
+          console.error(`[Strip Silence] Render failed "${track.name}" @${segStart}:`, e);
+          continue;
+        }
+
+        // Start analysis immediately — overlaps with the next segment's render
         analysisTasks.push(
-          fs.readFile(aifPath)
-            .then((buf): PendingResult => {
-              const aiffInfo  = parseAiff(buf);
-              const silenceRaw = detectSilenceFromAiff(aiffInfo, rmsThreshold, opts.minSilenceDuration);
+          detectSilenceStreaming(aifPath, rmsThreshold, opts.minSilenceDuration)
+            .then((silenceRaw): PendingResult => {
               const silenceAdj = applyRolls(silenceRaw, opts.preRollMs, opts.postRollMs);
-              console.log(`[Strip Silence] "${track.name}": ${silenceRaw.length} regions → ${silenceAdj.length} after rolls`);
-              return silenceAdj.length ? { track, ranges: silenceAdj } : null;
+              if (!silenceAdj.length) return null;
+
+              // Convert from seconds-relative-to-segment-start → absolute beats
+              const beatRanges = silenceAdj
+                .map(r => ({
+                  start: snapBeat(segStart + r.start / secondsPerBeat),
+                  end:   snapBeat(segStart + r.end   / secondsPerBeat),
+                }))
+                .filter(r => r.end > r.start);
+
+              console.log(`[Strip Silence] "${track.name}" @${segStart}: ${silenceRaw.length} → ${beatRanges.length}`);
+              return beatRanges.length ? { track, beatRanges } : null;
             })
-            .catch((e) => {
-              console.error(`[Strip Silence] Analysis failed for "${track.name}":`, e);
-              return null;
-            }),
+            .catch(e => { console.error(`[Strip Silence] Analysis failed:`, e); return null; }),
         );
       }
 
@@ -302,25 +454,20 @@ export function activate(activation: ActivationContext) {
 
       update("Analyzing…", 75);
       const results = await Promise.all(analysisTasks);
-      const pending = results.filter((r): r is { track: AudioTrack<"1.0.0">; ranges: SilenceRange[] } => r !== null);
+      const pending = results.filter((r): r is { track: AudioTrack<"1.0.0">; beatRanges: BeatRange[] } => r !== null);
 
-      if (signal.aborted || !pending.length) {
-        if (!pending.length) console.log("[Strip Silence] No silence regions found.");
+      if (!pending.length) {
+        console.log("[Strip Silence] No silence regions found.");
         return;
       }
 
       update("Applying changes…", 85);
 
-      const secondsPerBeat = 60 / context.application.song.tempo;
-
       const promises = context.withinTransaction(() =>
-        pending.flatMap(({ track, ranges }) =>
-          ranges.flatMap((r) => {
-            const startBeat = snapBeat(selectionStart + r.start / secondsPerBeat);
-            const endBeat   = snapBeat(selectionStart + r.end   / secondsPerBeat);
-            if (endBeat <= startBeat) return [];
-            return [track.clearClipsInRange(startBeat, endBeat)];
-          }),
+        pending.flatMap(({ track, beatRanges }) =>
+          beatRanges.flatMap(r =>
+            r.end > r.start ? [track.clearClipsInRange(r.start, r.end)] : [],
+          ),
         ),
       );
 
