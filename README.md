@@ -4,7 +4,7 @@ An [Ableton Live](https://www.ableton.com) extension that removes silence from a
 
 ## Installation
 
-1. Download **`Strip-Silence-1.0.19.ablx`** from this page
+1. Download **`Strip-Silence-1.0.31.ablx`** from this page
 2. Open Ableton Live → **Preferences → Extensions**
 3. Drag and drop the `.ablx` file onto the Extensions page
 
