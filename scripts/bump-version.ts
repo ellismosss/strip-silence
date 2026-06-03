@@ -1,3 +1,4 @@
+// Increments the patch version in manifest.json and package.json before each package build.
 import * as fs from "node:fs";
 
 const manifest = JSON.parse(fs.readFileSync("manifest.json", "utf8"));

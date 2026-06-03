@@ -1,3 +1,4 @@
+// esbuild config — bundles src/extension.ts into a single CJS file for Live's Extension Host.
 import * as esbuild from "esbuild";
 import * as fs from "node:fs";
 
