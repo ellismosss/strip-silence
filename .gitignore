@@ -1,9 +1,12 @@
-.DS_Store
+# dependencies & build output
 node_modules/
 dist/
-
-*.log
 vendor/
-*.tsbuildinfo
 
+# environment & local config
 .env
+
+# system & editor
+.DS_Store
+*.log
+*.tsbuildinfo
