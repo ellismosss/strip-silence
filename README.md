@@ -16,6 +16,7 @@ Requires the Ableton Live beta build that supports Extensions.
 - Works with both **AIFF and WAV** renders (follows your Record/Warp/Launch preference)
 - Configurable threshold, minimum silence duration, pre-roll, and post-roll
 - Option to snap cuts to the nearest beat
+- **Ripple edit** — automatically closes the gaps after stripping, sliding clips together
 - Right-click an arrangement time selection to process one or more tracks simultaneously
 - Right-click a track header to process the full track automatically
 - Renders only clip extents — skips empty gaps between clips for faster processing
@@ -44,6 +45,7 @@ Requires the Ableton Live beta build that supports Extensions.
 | **Pre-roll** | Silence kept before the next sound starts |
 | **Post-roll** | Silence kept after the previous sound ends |
 | **Cut to nearest beat** | Snaps each cut point to the nearest beat |
+| **Ripple edit** | Slides clips together after cutting, closing the gaps |
 
 ## Development
 
